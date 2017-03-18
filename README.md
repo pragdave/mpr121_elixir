@@ -17,8 +17,10 @@
   
   bits = Mpr121.touch_state_all(device)  # => 12 bits, one per touch channel
   
+  Mpr121.set_thresholds(device, 10, 15)
+  
   if Mpr121.is_touched?(device, 10) do
-    # executes if pin 10 (numbered from zero) is currently touched
+    IO.puts "pin 10 (numbered from zero) is currently touched"
   end
   ~~~
 
