@@ -132,7 +132,7 @@ defmodule Mpr121 do
   Return baseline data register value for the provided pin (0-11).
   Useful for debugging.
   """
-b  def baseline_data(i2c, pin)
+  def baseline_data(i2c, pin)
   when pin in 0..11 do
     GenServer.call(i2c, { :baseline_data, pin })
   end

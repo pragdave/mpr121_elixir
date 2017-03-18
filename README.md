@@ -26,7 +26,7 @@
   This module cannot run without the I2C module from Elixir/ALE.
   Unfortunately, ALE can only be built on Linux boxes. To partially
   mitigate this, we include a stubbed out version of the I2C module at
-  the end of this file. This stub is only compiled into your
+  the end of `lib/mpr121.ex`. This stub is only compiled into your
   application in `:dev` and `:test` environments. In `:prod` mix will
   automatically use the real thing. This means you'll need to set the
   env to :prod and do a `mix do deps.get, deps.compile` if you plan to
