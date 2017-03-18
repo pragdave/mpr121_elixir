@@ -103,7 +103,7 @@ defmodule Mpr121 do
   Return `true` if the specified pin is being touched, otherwise returns
   `false`.
   """
-  def is_touched(i2c, pin)
+  def is_touched?(i2c, pin)
   when pin in 0..11 do
     use Bitwise
     (touche_state_all(i2c) &&& (1 <<< pin)) != 0
@@ -132,7 +132,7 @@ defmodule Mpr121 do
   Return baseline data register value for the provided pin (0-11).
   Useful for debugging.
   """
-  def baseline_data(i2c, pin)
+b  def baseline_data(i2c, pin)
   when pin in 0..11 do
     GenServer.call(i2c, { :baseline_data, pin })
   end

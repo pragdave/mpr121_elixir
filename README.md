@@ -1,4 +1,6 @@
-# Mpr121
+# MPR121 Interface for Elixir
+
+  ** DON'T USE — Still under development **
 
   This module drives a MPR121 12-channel touch sensor via the I2C
   interface provided by Elixir/ALE.
@@ -9,6 +11,17 @@
   You initialize the interface using `start_link()`, passing in the
   name of the bus (typically `i2c-1`. You can also pass the address of
   the MPR121 (which defaults to 0x5a) and options.
+
+  ~~~ elixir
+  { :ok, device } = Mpr121.start_link("i2c-1")
+  
+  bits = Mpr121.touch_state_all(device)  # => 12 bits, one per touch channel
+  
+  if Mpr121.is_touched?(device, 10) do
+    # executes if pin 10 (numbered from zero) is currently touched
+  end
+  ~~~
+
 
   This module cannot run without the I2C module from Elixir/ALE.
   Unfortunately, ALE can only be built on Linux boxes. To partially
