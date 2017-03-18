@@ -4,6 +4,11 @@ defmodule Mpr121 do
   
   @moduledoc File.read!("README.md")
 
+
+  @type register :: 0..127
+  @type pin      :: 0..11
+  @type bus_name :: binary()
+  
   # Register addresses
   
   @baseline_0      0x1E
@@ -46,8 +51,33 @@ defmodule Mpr121 do
   @i2caddr_default  0x5a
 
 
-# @max_i2c_retries 5
+  # @max_i2c_retries 5
 
+  # this is the configuration we set on reset.
+  @default_config  [
+    # Configure baseline filtering control registers.
+    { @mhdr, 0x01 },
+    { @nhdr, 0x01 },
+    { @nclr, 0x0E },
+    { @fdlr, 0x00 },
+    { @mhdf, 0x01 },
+    { @nhdf, 0x05 },
+    { @nclf, 0x01 },
+    { @fdlf, 0x00 },
+    { @nhdt, 0x00 },
+    { @nclt, 0x00 },
+    { @fdlt, 0x00 },
+    
+    # Set other configuration registers.
+    { @debounce, 0x00 },
+    { @config1,  0x10 }, # default, 16uA charge current
+    { @config2,  0x20 }, # 0.5uS encoding, 1ms period
+    
+    # Enable all electrodes. Start with first 5 bits of baseline tracking
+    { @ecr,      0x8F }
+  ]
+    
+  
 
   defstruct i2c: nil, options: []
 
@@ -74,6 +104,8 @@ defmodule Mpr121 do
   just a leaky abstraction.)
   """
 
+  @spec start_link(binary, byte(), list( {atom(), any() })) :: { :ok, pid() }
+  
   def start_link(bus, address \\ @i2caddr_default, options \\ []) do
     { :ok, pid } = GenServer.start(__MODULE__, {bus, address, options})
     Process.send_after(pid, :reset, 0)
@@ -86,6 +118,8 @@ defmodule Mpr121 do
   you call `start_link` on this module.
   """
 
+  @spec reset(pid()) :: any()
+  
   def reset(i2c) do
     GenServer.call(i2c, { :reset })
   end
@@ -94,6 +128,8 @@ defmodule Mpr121 do
   Return touch state of all pins as a 12-bit value where each bit 
   represents a pin, with a value of 1 being touched and 0 not being touched.
   """
+
+  @spec touche_state_all(pid()) :: 0..0x0fff
   
   def touche_state_all(i2c) do
     GenServer.call(i2c, { :touch_state_all })
@@ -103,6 +139,9 @@ defmodule Mpr121 do
   Return `true` if the specified pin is being touched, otherwise returns
   `false`.
   """
+
+  @spec is_touched?(pid, pin) :: boolean()
+  
   def is_touched?(i2c, pin)
   when pin in 0..11 do
     use Bitwise
@@ -194,7 +233,8 @@ defmodule Mpr121 do
   ###########
   # Helpers #
   ###########
-  
+
+  @spec reset_mpr121(pid()) :: any()
   defp reset_mpr121(i2c) do
     retry_w(i2c, << @softreset, 0x63 >>)
 
@@ -212,48 +252,27 @@ defmodule Mpr121 do
     # Set threshold for touch and release to default values.
     set_thresholds(i2c, 12, 6)
 
-    config = [
-      # Configure baseline filtering control registers.
-      { @mhdr, 0x01 },
-      { @nhdr, 0x01 },
-      { @nclr, 0x0E },
-      { @fdlr, 0x00 },
-      { @mhdf, 0x01 },
-      { @nhdf, 0x05 },
-      { @nclf, 0x01 },
-      { @fdlf, 0x00 },
-      { @nhdt, 0x00 },
-      { @nclt, 0x00 },
-      { @fdlt, 0x00 },
-      
-      # Set other configuration registers.
-      { @debounce, 0x00 },
-      { @config1,  0x10 }, # default, 16uA charge current
-      { @config2,  0x20 }, # 0.5uS encoding, 1ms period
-      
-      # Enable all electrodes. Start with first 5 bits of baseline tracking
-      { @ecr,      0x8F }
-    ]
-    
-    for { register, content } <- config do
-      retry_w(i2c, << register, content >>)
-    end
+    set_registers(i2c, @default_config)
   end
 
 
+  @spec dump([ byte() ]) :: binary()
   def dump(data) do
     for(<< byte <- data >>, do: "0x#{Integer.to_string(byte, 16)}")
     |> Enum.join(", ")
   end
 
   # write a binary to the device
+  @spec retry_w(pid(), binary()) :: any()
   defp retry_w(i2c, data) do
     IO.puts "writing #{dump(data)}"
     I2c.write(i2c, data)
   end
 
   # atomic write/read. Reads `input_size` bytes, and then builds the
-  # result into an integer 
+  # result into an integer
+
+  @spec retry_wr(pid(), binary(), pos_integer()) :: pos_integer()
   defp retry_wr(i2c, data, input_size) do
     result = I2c.write_read(i2c, data, input_size)
              |> Enum.reduce(fn (val, total) -> total * 256 + val end)
@@ -261,7 +280,13 @@ defmodule Mpr121 do
     IO.puts "    => #{inspect result}"
     result
   end
-    
+
+  @spec set_registers( pid(), [ { register(), byte() } ]) :: any()
+  defp set_registers(i2c, values) do
+    for { register, content } <- values do
+      retry_w(i2c, << register, content >>)
+    end
+  end    
     # def _i2c_retry(self, func, *params):
     #     # Run specified I2C request and ignore IOError 110 (timeout) up to
     #     # retries times.  For some reason the Pi 2 hardware I2C appears to be
