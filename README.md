@@ -1,6 +1,6 @@
 # MPR121 Interface for Elixir
 
-  ** DON'T USE — Still under development **
+####  Status: Not field tested. Use with care.
 
   This module drives a MPR121 12-channel touch sensor via the I2C
   interface provided by Elixir/ALE.
@@ -36,7 +36,7 @@
 
   If running with Nerves, this should all just work out.
 
-
+  ----
   
   Based on the Python library, which is:
   

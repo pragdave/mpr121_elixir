@@ -4,10 +4,11 @@ defmodule Mpr121 do
   
   @moduledoc File.read!("README.md")
 
-
-  @type register :: 0..127
-  @type pin      :: 0..11
-  @type bus_name :: binary()
+  @type register     :: 0..127
+  @type pin          :: 0..11
+  @type ten_bits     :: 0..0x3ff
+  @type sixteen_bits :: 0..0xffff
+  @type bus_name     :: String.t
   
   # Register addresses
   
@@ -50,6 +51,10 @@ defmodule Mpr121 do
 
   @i2caddr_default  0x5a
 
+  @combined_flag_path "/sys/module/i2c_bcm2708/parameters/combined"
+  @combined_flag_yes  "Y"
+  @combined_flag_no   "N"
+  
 
   # @max_i2c_retries 5
 
@@ -104,12 +109,10 @@ defmodule Mpr121 do
   just a leaky abstraction.)
   """
 
-  @spec start_link(binary, byte(), list( {atom(), any() })) :: { :ok, pid() }
+  @spec start_link(bus_name(), byte(), list( {atom(), any() })) :: { :ok, pid() }
   
   def start_link(bus, address \\ @i2caddr_default, options \\ []) do
-    { :ok, pid } = GenServer.start(__MODULE__, {bus, address, options})
-    Process.send_after(pid, :reset, 0)
-    { :ok, pid }
+    GenServer.start(__MODULE__, {bus, address, options})
   end
 
   @doc """
@@ -129,9 +132,9 @@ defmodule Mpr121 do
   represents a pin, with a value of 1 being touched and 0 not being touched.
   """
 
-  @spec touche_state_all(pid()) :: 0..0x0fff
+  @spec touch_state_all(pid()) :: 0..0x0fff
   
-  def touche_state_all(i2c) do
+  def touch_state_all(i2c) do
     GenServer.call(i2c, { :touch_state_all })
   end
     
@@ -145,7 +148,7 @@ defmodule Mpr121 do
   def is_touched?(i2c, pin)
   when pin in 0..11 do
     use Bitwise
-    (touche_state_all(i2c) &&& (1 <<< pin)) != 0
+    (touch_state_all(i2c) &&& (1 <<< pin)) != 0
   end
 
   @doc """
@@ -153,6 +156,9 @@ defmodule Mpr121 do
   values.  Both touch and release should be a value between 0 to 255
   (inclusive). Returns noting meaningful
   """
+
+  @spec set_thresholds(pid(), byte(), byte()) :: any()
+  
   def set_thresholds(i2c, touch, release)
   when touch in 0..255 and release in 0..255 do
     GenServer.call(i2c, { :set_thresholds, touch, release })
@@ -162,6 +168,9 @@ defmodule Mpr121 do
   Return filtered data register value for the provided pin (0-11).
   Useful for debugging.
   """
+
+  @spec filtered_data(pid(), pin()) :: sixteen_bits()
+
   def filtered_data(i2c, pin)
   when pin in 0..11 do
     GenServer.call(i2c, { :filtered_data, pin })
@@ -171,6 +180,9 @@ defmodule Mpr121 do
   Return baseline data register value for the provided pin (0-11).
   Useful for debugging.
   """
+
+  @spec baseline_data(pid(), pin()) :: ten_bits()
+  
   def baseline_data(i2c, pin)
   when pin in 0..11 do
     GenServer.call(i2c, { :baseline_data, pin })
@@ -185,48 +197,46 @@ defmodule Mpr121 do
   def init({bus, address, options}) do
     { :ok, i2c } = I2c.start_link(bus, address)
     state = %__MODULE__{i2c: i2c, options: options}
+    Process.send_after(self(), :reset, 0)
     { :ok, state }
   end
 
   @doc false
   def handle_info(:reset, state = %{ i2c: i2c }) do
-    reset_mpr121(i2c)
-    { :no_reply, state }
+    do_reset_mpr121(i2c)
+    { :noreply, state }
   end
 
   @doc false
   def handle_call({ :reset }, state = %{ i2c: i2c }) do
-    reset_mpr121(i2c)
+    do_reset_mpr121(i2c)
     { :reply, true, state }
   end
   
   
   @doc false
   def handle_call({ :set_thresholds, touch, release }, _, state = %{ i2c: i2c }) do
-    for i <- 0..11 do
-      retry_w(i2c, << @touchth_0   + 2*i, touch >>)
-      retry_w(i2c, << @releaseth_0 + 2*i, release >>)
-    end
+    do_set_thresholds(i2c, touch, release)
     { :reply, true, state }
   end
 
   @doc false
   def handle_call({ :touch_state_all }, _, state = %{ i2c: i2c }) do
     use Bitwise
-    result = retry_wr(i2c, << @touchstatus_l >>, 2) &&& 0x0FFF
+    result = do_retry_wr(i2c, << @touchstatus_l >>, 2) &&& 0x0FFF
     { :reply, result, state }
   end
     
   @doc false
   def handle_call({ :filtered_data, pin }, _, state = %{ i2c: i2c }) do
-    result = retry_wr(i2c, << @filtdata_0l + pin*2 >>, 2)
+    result = do_retry_wr(i2c, << @filtdata_0l + pin*2 >>, 2)
     { :reply, result, state }
   end
     
   @doc false
   def handle_call({ :baseline_data, pin }, _, state = %{ i2c: i2c }) do
     use Bitwise
-    result = retry_wr(i2c, << @baseline_0 + pin >>, 1) <<< 2
+    result = do_retry_wr(i2c, << @baseline_0 + pin >>, 1) <<< 2
     { :reply, result, state }
   end
     
@@ -234,25 +244,34 @@ defmodule Mpr121 do
   # Helpers #
   ###########
 
-  @spec reset_mpr121(pid()) :: any()
-  defp reset_mpr121(i2c) do
-    retry_w(i2c, << @softreset, 0x63 >>)
+  @spec do_reset_mpr121(pid()) :: any()
+  defp do_reset_mpr121(i2c) do
+    # This may well mess up other i2c bus users, but there doesn't seem to
+    # be a way around it
+
+    do_set_combined_flag(true)
+
+    # device reset
+    do_retry_w(i2c, << @softreset, 0x63 >>)
 
     # Set electrode configuration to default values.
-    retry_w(i2c, << @ecr, 0x00 >>)
+    do_retry_w(i2c, << @ecr, 0x00 >>)
 
     # Check CDT, SFI, ESI configuration is at default values.
-    status = retry_wr(i2c, <<@config2>>, 1)
+    status = do_retry_wr(i2c, <<@config2>>, 1)
     if status != 0x24 do
       raise("config2 values incorrect after reset…\n" <>
-        "\tExpected 0x24, got 0x#{Integer.to_string(status, 16)}")
+        "\tExpected 0x24, got 0x#{Integer.to_string(status, 16)}\n" <>
+        "This might be because I'm talking to the wrong device, or because\n" <>
+        "the i2c controller is not in repeated start mode. If the latter\n" <>
+        "case, may your God have mercy on you.")
       
     end
 
     # Set threshold for touch and release to default values.
-    set_thresholds(i2c, 12, 6)
+    do_set_thresholds(i2c, 12, 6)
 
-    set_registers(i2c, @default_config)
+    do_set_registers(i2c, @default_config)
   end
 
 
@@ -263,51 +282,45 @@ defmodule Mpr121 do
   end
 
   # write a binary to the device
-  @spec retry_w(pid(), binary()) :: any()
-  defp retry_w(i2c, data) do
-    IO.puts "writing #{dump(data)}"
+  @spec do_retry_w( pid(), binary() ) :: nil
+  defp do_retry_w(i2c, data) do
     I2c.write(i2c, data)
+    nil
   end
 
   # atomic write/read. Reads `input_size` bytes, and then builds the
   # result into an integer
 
-  @spec retry_wr(pid(), binary(), pos_integer()) :: pos_integer()
-  defp retry_wr(i2c, data, input_size) do
+  @spec do_retry_wr(pid(), binary(), pos_integer()) :: pos_integer()
+  defp do_retry_wr(i2c, data, input_size) do
     result = I2c.write_read(i2c, data, input_size)
-             |> Enum.reduce(fn (val, total) -> total * 256 + val end)
-    
-    IO.puts "    => #{inspect result}"
+             |> :binary.decode_unsigned(:little)
     result
   end
 
-  @spec set_registers( pid(), [ { register(), byte() } ]) :: any()
-  defp set_registers(i2c, values) do
+  @spec do_set_registers( pid(), [ { register(), byte() } ]) :: nil
+  defp do_set_registers(i2c, values) do
     for { register, content } <- values do
-      retry_w(i2c, << register, content >>)
+      do_retry_w(i2c, << register, content >>)
     end
+    nil
   end    
-    # def _i2c_retry(self, func, *params):
-    #     # Run specified I2C request and ignore IOError 110 (timeout) up to
-    #     # retries times.  For some reason the Pi 2 hardware I2C appears to be
-    #     # flakey and randomly return timeout errors on I2C reads.  This will
-    #     # catch those errors, reset the MPR121, and retry.
-    #     count = 0
-    #     while True:
-    #         try:
-    #             return func(*params)
-    #         except IOError as ex:
-    #             # Re-throw anything that isn't a timeout (110) error.
-    #             if ex.errno != 110:
-    #                 raise ex
-    #         # Else there was a timeout, so reset the device and retry.
-    #         self._reset()
-    #         # Increase count and fail after maximum number of retries.
-    #         count += 1
-    #         if count >= MAX_I2C_RETRIES:
-    #             raise RuntimeError('Exceeded maximum number or retries attempting I2C communication!')
 
-    
+  @spec do_set_thresholds( pid(), byte(), byte()) :: nil
+  defp do_set_thresholds(i2c, touch, release) do
+    for i <- 0..11 do
+      do_retry_w(i2c, << @touchth_0   + 2*i, touch >>)
+      do_retry_w(i2c, << @releaseth_0 + 2*i, release >>)
+    end
+    nil
+  end
+  
+  @spec do_set_combined_flag(flag :: as_boolean(any)) :: any()
+  def do_set_combined_flag(flag) do
+    flag_char = if flag, do: @combined_flag_yes, else: @combined_flag_no
+    File.chmod!(@combined_flag_path, 0o666)
+    File.write!(@combined_flag_path, flag_char)
+  end
 end
 
 if Mix.env != :prod do
