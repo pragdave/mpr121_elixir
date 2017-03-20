@@ -4,7 +4,7 @@ defmodule Mpr121.Mixfile do
   @version "0.1.0"
   
   @deps [
-    { :elixir_ale, "~> 0.5", only: :prod },
+    { :elixir_ale, "~> 0.6", only: :prod },
   ]
 
   ############################################################

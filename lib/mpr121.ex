@@ -1,6 +1,8 @@
 defmodule Mpr121 do
 
   require Logger
+
+  alias ElixirALE.I2C
   
   @moduledoc File.read!("README.md")
 
@@ -195,7 +197,7 @@ defmodule Mpr121 do
 
   @doc false
   def init({bus, address, options}) do
-    { :ok, i2c } = I2c.start_link(bus, address)
+    { :ok, i2c } = I2C.start_link(bus, address)
     state = %__MODULE__{i2c: i2c, options: options}
     Process.send_after(self(), :reset, 0)
     { :ok, state }
@@ -284,7 +286,7 @@ defmodule Mpr121 do
   # write a binary to the device
   @spec do_retry_w( pid(), binary() ) :: nil
   defp do_retry_w(i2c, data) do
-    I2c.write(i2c, data)
+    I2C.write(i2c, data)
     nil
   end
 
@@ -293,7 +295,7 @@ defmodule Mpr121 do
 
   @spec do_retry_wr(pid(), binary(), pos_integer()) :: pos_integer()
   defp do_retry_wr(i2c, data, input_size) do
-    result = I2c.write_read(i2c, data, input_size)
+    result = I2C.write_read(i2c, data, input_size)
              |> :binary.decode_unsigned(:little)
     result
   end
@@ -324,7 +326,7 @@ defmodule Mpr121 do
 end
 
 if Mix.env != :prod do
-  defmodule I2c do
+  defmodule ElixirALE.I2C do
 
     import Mpr121, only: [ dump: 1]
     require Logger
